@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tetris</title>
+</head>
+<body>
+<style>
+  .cell {
+    width: 20px;
+    height: 20px;
+    border: 1px solid;
+    position: relative;
+    text-align: center;
+  }
+
+  table {
+    border: 1px solid;
+  }
+
+  .cube::before {
+    content: 'X';
+  }
+
+</style>
+<table cellpadding="0" cellspacing="0">
+  <tbody></tbody>
+</table>
+<script>
+  // create table
+  var cols = 10;
+  var rows = 20;
+
+  document
+    .getElementsByTagName('tbody')[0]
+    .innerHTML =
+    (new Array(+rows)).fill(0)
+      .map(
+        (_, i) =>
+          `<tr>${
+            (new Array(+cols))
+              .fill(0)
+              .map(
+              (_, j) => `<td id="${j + ',' + i}" class="cell"></td>`
+            ).join('')
+            }</tr>`
+      )
+      .join('');
+
+  // add game vars
+  let gravityTimerHolder;
+  let paintTimerHolder;
+  let gravityLoopTime = 1000;
+  let paintLoopTime = 16;
+  let startPositionDelta = [0,0];
+  let deathFigures = [];
+  let currentAction;
+  const figuresMap = {
+    'I': [
+      [[3,2],[4,2],[5,2],[6,2]],
+      [[5,0],[5,1],[5,2],[5,3]]
+    ],
+    'J': [
+      [[4,0],[4,1],[5,1],[6,1]],
+      [[6,0],[5,0],[5,1],[5,2]],
+      [[6,2],[6,1],[5,1],[4,1]],
+      [[4,2],[5,2],[5,1],[5,0]]
+    ],
+    'L': [
+      [[5,0],[5,1],[5,2],[6,2]],
+      [[4,2],[4,1],[5,1],[6,1]],
+      [[4,0],[5,0],[5,1],[5,2]],
+      [[6,0],[6,1],[5,1],[4,1]]
+    ],
+    'O': [
+      [[4,1],[5,1],[5,2],[4,2]]
+    ],
+    'S': [
+      [[4,2],[5,2],[5,1],[6,1]],
+      [[5,1],[5,2],[6,2],[6,3]]
+    ],
+    'T': [
+      [[4,2],[5,1],[5,2],[6,2]],
+      [[5,1],[5,2],[5,3],[6,2]],
+      [[4,1],[5,1],[5,2],[6,1]],
+      [[5,1],[5,2],[5,3],[6,2]]
+    ],
+    'Z': [
+      [[4,1],[5,1],[5,2],[6,2]],
+      [[5,3],[5,2],[6,2],[6,1]]
+    ]
+  };
+  const figureTypes = ['I','J','L','O','S','T','Z'];
+
+  //helpers
+  const getRandArrItem = arr => arr[Math.floor(Math.random() * arr.length)];
+  const hasOverlays = (f1, f2) => f1.some(i1 => f2.some(i2 => i1.toString() === i2.toString()));
+  const applyMovements = (cellsCoordinatesArray, movementCoordinatesArray) => cellsCoordinatesArray.map(
+    cellsCoordinatesItem => cellsCoordinatesItem.map(
+      (cellsCoordinatesItemAxis, index) => cellsCoordinatesItemAxis + movementCoordinatesArray[index]
+    )
+  );
+  const reduceFullLine = (cellsCoordinatesArray, lineNumber) =>
+    cellsCoordinatesArray
+      .filter(([,y]) => y!== lineNumber)
+      .map(([x,y]) => (y < lineNumber ? [x,y+1] : [x,y]));
+
+
+  // Define initial figure
+  let figureName = getRandArrItem(figureTypes);
+  let figureViews = figuresMap[figureName];
+  let figureViewNumber = 0;
+  let figureCurrentView = figureViews[figureViewNumber];
+
+
+  //dirty funcs ----
+  const getNextFigureViewPosition = () => figureViewNumber + 1 < figureViews.length - 1 ?  figureViewNumber + 1 : 0;
+
+  function nextFigureView() {
+    figureCurrentView = figureViews[getNextFigureViewPosition];
+  }
+
+  const overlapsBottomBorder = figure => figure.some(([,y]) => y > rows - 1);
+  const overlapsLeftBorder = figure => figure.some(([x,]) => x < 0);
+  const overlapsRightBorder = figure => figure.some(([x,]) => x > cols - 1);
+  const overlapsAnyBorder = figure => figure.some(([x,y]) => (x > cols - 1) || (y > rows - 1) || (x < 0));
+
+  const removeFullLines = () => {
+    Object.entries(
+      deathFigures.reduce((acc, [, lineNumber]) => ({
+        ...acc,
+        y: acc[lineNumber] ? acc[lineNumber]++ : 1
+      }), {}))
+      .filter(([, totalBlocksInLine]) => totalBlocksInLine === cols)
+      .map(([lineNumber,]) => lineNumber)
+      .forEach(number => {
+        reduceFullLine(deathFigures, +number);
+      })
+  };
+
+  function moveFigureDown() {
+    const figureToCheck = applyMovements(figureCurrentView, [startPositionDelta[0],startPositionDelta[1]+1]);
+    if(!(overlapsBottomBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))){
+      startPositionDelta[1]+=1;
+      gravityLoopTime = 1000;
+    } else {
+      //check for lines and move if necessary
+      deathFigures = deathFigures.push(applyMovements(figureCurrentView, startPositionDelta));
+      removeFullLines();
+      //generate new figure
+      startPositionDelta = [0,0];
+      figureName = getRandArrItem(figureTypes);
+      figureViews = figuresMap[figureName];
+      figureViewNumber = 0;
+      figureCurrentView = figureViews[figureViewNumber];
+      //overlaps with corps - end game
+      if(hasOverlays(figureCurrentView, deathFigures)){
+        alert('Game Over');
+        deathFigures = [];
+      }
+    }
+  }
+
+  const actionsHolder = {
+    rotateFigure: () => {
+      const figureToCheck = applyMovements(figureViews[getNextFigureViewPosition], startPositionDelta);
+      if(!(overlapsAnyBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))){
+        nextFigureView()
+      }
+    },
+    speedUpFalling: () => {
+      gravityLoopTime = 500;
+    },
+    moveFigureLeft: () => {
+      const figureToCheck = applyMovements(figureCurrentView, [startPositionDelta[0]-1,startPositionDelta[1]]);
+      if(!(overlapsLeftBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))) {
+        startPositionDelta[0] -= 1
+      }
+    },
+    moveFigureRight: () => {
+      const figureToCheck = applyMovements(figureCurrentView, [startPositionDelta[0]+1,startPositionDelta[1]]);
+      if(!(overlapsRightBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))) {
+        startPositionDelta[0] += 1
+      }
+    },
+    defaultAction: () => {}
+  };
+
+
+  //
+  document.addEventListener('keydown', (e) => {
+    let key = e.key.toLowerCase();
+    currentAction =
+      key === 'arrowup' || key === 'w'
+        ? 'rotateFigure'
+        : key === 'arrowdown' || key === 's'
+          ? 'speedUpFalling'
+          : key === 'arrowleft' || key === 'a'
+            ? 'moveFigureLeft'
+            : key === 'arrowright' || key === 'd'
+              ? 'moveFigureRight'
+              : 'defaultAction';
+    actionsHolder[currentAction]()
+  });
+
+
+  function paintCurrentState() {
+    const firureToRender = applyMovements(figureCurrentView, startPositionDelta);
+    let busyCells = [...firureToRender, ...deathFigures];
+    // refresh html
+    Array.from(document.getElementsByClassName('cell')).forEach(item => {
+      item.classList.remove('cube');
+      if (busyCells.join('_').includes(item.id)) {
+        item.classList.add('cube');
+      }
+    });
+  }
+
+  // gravityLoop
+  const gravityLoop = () => {
+    moveFigureDown();
+    gravityTimerHolder = setTimeout(() => {
+      requestAnimationFrame(gravityLoop)
+    }, gravityLoopTime);
+  };
+  requestAnimationFrame(gravityLoop);
+
+  //paintLoop
+  const paintLoop = () => {
+    paintCurrentState();
+    paintTimerHolder = setTimeout(() => {
+      requestAnimationFrame(paintLoop)
+    }, paintLoopTime);
+  };
+  requestAnimationFrame(paintLoop)
+
+</script>
+</body>
+</html>
