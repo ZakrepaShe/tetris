@@ -23,6 +23,8 @@
   }
 
 </style>
+<span>Score:</span>
+<span id="score">0</span>
 <table cellpadding="0" cellspacing="0">
   <tbody></tbody>
 </table>
@@ -41,22 +43,24 @@
             (new Array(+cols))
               .fill(0)
               .map(
-              (_, j) => `<td id="${j + ',' + i}" class="cell"></td>`
-            ).join('')
+                (_, j) => `<td id="${j + ',' + i}" class="cell"></td>`
+              ).join('')
             }</tr>`
       )
       .join('');
 
   // add game vars
   let currentGravityCycle = 0;
-  let defaultGravityCycle = 30;//1 cell/s
-  let fastGravityCycle = 15; //  2 cells/s
-  let userGravityCycle = defaultGravityCycle;
+  const defaultGravityCyclesRefreshAmount = 30;// ~1 cell/second
+  const fastGravityCyclesRefreshAmount = 6; //   ~5 cells/second
+  let maxGravityCyclesAmount = defaultGravityCyclesRefreshAmount;
   let paintTimerHolder;
   let paintLoopTime = 16; //16ms = 30fps
-  let startPositionDelta = [0,0];
-  let deathFigures = [];
+  const defaultStartPositionShift = [0, 0];
+  let startPositionShift = [...defaultStartPositionShift];
+  let frozenCells = [];
   let currentAction;
+  let score = 0;
   const figuresMap = {
     'I': [
       [[3,2],[4,2],[5,2],[6,2]],
@@ -93,105 +97,128 @@
     ]
   };
   const figureTypes = ['I','J','L','O','S','T','Z'];
+  const directions = {
+    up: [0, -1],
+    down: [0, 1],
+    left: [-1, 0],
+    right: [1, 0]
+  };
+  const scores = [0,100,300,700,1500];
 
   //helpers
-  const getRandArrItem = arr => arr[Math.floor(Math.random() * arr.length)];
+  const getRandomNumber = max => Math.floor(Math.random() * max);
+  const getRandArrItem = arr => arr[getRandomNumber(arr.length)];
   const hasOverlays = (f1, f2) => f1.some(i1 => f2.some(i2 => i1.toString() === i2.toString()));
-  const applyMovements = (cellsCoordinatesArray, movementCoordinatesArray) => cellsCoordinatesArray.map(
-    cellsCoordinatesItem => cellsCoordinatesItem.map(
-      (cellsCoordinatesItemAxis, index) => cellsCoordinatesItemAxis + movementCoordinatesArray[index]
-    )
-  );
+  const shiftCoordinatesFor =
+    coordinatesArray1 =>
+      coordinatesArray2 =>
+        coordinatesArray1.map((axis, index) => axis + coordinatesArray2[index]);
+  const getMovedCurrentPosition = shiftAmountsArray => shiftCoordinatesFor(startPositionShift)(shiftAmountsArray);
+  const applyPositionShiftToFigure = (positionShiftArray, figureCoordinatesArray = figureCurrentView) =>
+    figureCoordinatesArray.map(shiftCoordinatesFor(positionShiftArray));
   const reduceFullLine = (cellsCoordinatesArray, lineNumber) =>
     cellsCoordinatesArray
-      .filter(([,y]) => y!== lineNumber)
-      .map(([x,y]) => (y < lineNumber ? [x,y+1] : [x,y]));
+      .filter(([, y]) => y !== lineNumber)
+      .map(([x, y]) => (y < lineNumber ? [x, y + 1] : [x, y]));
 
+  let figureName, figureViews, figureViewNumber, figureCurrentView;
+  const generateNewFigure = () => {
+    figureName = getRandArrItem(figureTypes);
+    figureViews = figuresMap[figureName];
+    figureViewNumber = getRandomNumber(figureViews.length);
+    figureCurrentView = figureViews[figureViewNumber];
+  };
 
   // Define initial figure
-  let figureName = getRandArrItem(figureTypes);
-  let figureViews = figuresMap[figureName];
-  let figureViewNumber = 0;
-  let figureCurrentView = figureViews[figureViewNumber];
+  generateNewFigure();
 
+  const getNextFigureViewNumber = () => figureViewNumber + 1 < figureViews.length ? figureViewNumber + 1 : 0;
 
-  //dirty funcs ----
-  const getNextFigureViewPosition = () => figureViewNumber + 1 < figureViews.length ?  figureViewNumber + 1 : 0;
-
-  function nextFigureView() {
-    figureViewNumber = getNextFigureViewPosition();
-    figureCurrentView = figureViews[figureViewNumber];
-  }
-
-  const overlapsBottomBorder = figure => figure.some(([,y]) => y > rows - 1);
+  const overlapsBottomBorder = figure => figure.some(([, y]) => y > rows - 1);
   const overlapsLeftBorder = figure => figure.some(([x,]) => x < 0);
   const overlapsRightBorder = figure => figure.some(([x,]) => x > cols - 1);
-  const overlapsAnyBorder = figure => figure.some(([x,y]) => (x > cols - 1) || (y > rows - 1) || (x < 0));
+  const overlapsAnyBorder = figure =>
+    overlapsBottomBorder(figure)
+    || overlapsLeftBorder(figure)
+    || overlapsRightBorder(figure);
 
   const removeFullLines = () => {
+    //taking in each row count of busy cells [["12",7],["14",2]]
+    let fullRowAmount = 0;
     Object.entries(
-      deathFigures.reduce((acc, [, lineNumber]) => ({
+      frozenCells.reduce((acc, [, lineNumber]) => ({
         ...acc,
         [lineNumber]: acc[lineNumber] ? acc[lineNumber] + 1 : 1
       }), {}))
+      // filtering only full rows
       .filter(([, totalBlocksInLine]) => totalBlocksInLine === cols)
+      // taking full rows line numbers
       .map(([lineNumber,]) => lineNumber)
+      //clearing full rows and shifting all rows above each cleared row lower, 1 by 1
       .forEach(number => {
-        deathFigures = reduceFullLine(deathFigures, +number);
-      })
+        frozenCells = reduceFullLine(frozenCells, +number);
+        fullRowAmount++
+      });
+    //score rising
+    addToScore(fullRowAmount);
+  };
+
+  const addToScore = fullRowAmount => {
+    score+= scores[fullRowAmount];
   };
 
   const moveFigureDown = () => {
-    const figureToCheck = applyMovements(figureCurrentView, [startPositionDelta[0],startPositionDelta[1]+1]);
-    if(!(overlapsBottomBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))){
-      startPositionDelta[1]+=1;
+    const figureToCheck = applyPositionShiftToFigure(getMovedCurrentPosition(directions.down));
+    if (!(overlapsBottomBorder(figureToCheck) || hasOverlays(figureToCheck, frozenCells))) {
+      startPositionShift = getMovedCurrentPosition(directions.down)
     } else {
+      //add current figure cells to frozen cells
+      frozenCells.push(...applyPositionShiftToFigure(startPositionShift));
       //check for lines and move if necessary
-      deathFigures.push(...applyMovements(figureCurrentView, startPositionDelta));
       removeFullLines();
       //generate new figure
-      startPositionDelta = [0,0];
-      figureName = getRandArrItem(figureTypes);
-      figureViews = figuresMap[figureName];
-      figureViewNumber = 0;
-      figureCurrentView = figureViews[figureViewNumber];
+      startPositionShift = [...defaultStartPositionShift];
+      generateNewFigure();
       //overlaps with corps - end game
-      if(hasOverlays(figureCurrentView, deathFigures)){
-        alert('Game Over');
-        deathFigures = [];
+      if (hasOverlays(figureCurrentView, frozenCells)) {
+        alert('Game Over, Score: ' + score);
+        frozenCells = [];
+        score = 0;
       }
     }
   };
 
   const actionsHolder = {
     rotateFigure: () => {
-      const figureToCheck = applyMovements(figureViews[getNextFigureViewPosition()], startPositionDelta);
-      if(!(overlapsAnyBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))){
-        nextFigureView()
+      const figureToCheck = applyPositionShiftToFigure(startPositionShift, figureViews[getNextFigureViewNumber()]);
+      if (!(overlapsAnyBorder(figureToCheck) || hasOverlays(figureToCheck, frozenCells))) {
+        // apply next figure view
+        figureViewNumber = getNextFigureViewNumber();
+        figureCurrentView = figureViews[figureViewNumber];
       }
     },
     speedUpFalling: () => {
-      userGravityCycle = fastGravityCycle;
+      maxGravityCyclesAmount = fastGravityCyclesRefreshAmount;
     },
     moveFigureLeft: () => {
-      const figureToCheck = applyMovements(figureCurrentView, [startPositionDelta[0]-1,startPositionDelta[1]]);
-      if(!(overlapsLeftBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))) {
-        startPositionDelta[0] -= 1
+      const figureToCheck = applyPositionShiftToFigure(getMovedCurrentPosition(directions.left));
+      if (!(overlapsLeftBorder(figureToCheck) || hasOverlays(figureToCheck, frozenCells))) {
+        startPositionShift = getMovedCurrentPosition(directions.left)
       }
     },
     moveFigureRight: () => {
-      const figureToCheck = applyMovements(figureCurrentView, [startPositionDelta[0]+1,startPositionDelta[1]]);
-      if(!(overlapsRightBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))) {
-        startPositionDelta[0] += 1
+      const figureToCheck = applyPositionShiftToFigure(getMovedCurrentPosition(directions.right));
+      if (!(overlapsRightBorder(figureToCheck) || hasOverlays(figureToCheck, frozenCells))) {
+        startPositionShift = getMovedCurrentPosition(directions.right)
       }
     },
     defaultAction: () => {}
   };
 
-
-  //
   document.addEventListener('keydown', (e) => {
     let key = e.key.toLowerCase();
+    // mapping action to string and taking appropriate action from actionsHolder object
+    // instead of using switch/case construction
     currentAction =
       key === 'arrowup' || key === 'w'
         ? 'rotateFigure'
@@ -205,29 +232,32 @@
     actionsHolder[currentAction]()
   });
 
+  const calculateCurrentState = () => {
+    const currentFigureCells = applyPositionShiftToFigure(startPositionShift);
+    // joining all cell together
+    return [...currentFigureCells, ...frozenCells];
+  };
 
   const paintCurrentState = busyCells => {
     // refresh html
     Array.from(document.getElementsByClassName('cell')).forEach(item => {
+      //cleans every item
       item.classList.remove('cube');
+      // marks needed cells with 'X'
       if (busyCells.some(cell => cell.toString() === item.id)) {
         item.classList.add('cube');
       }
     });
-  };
-
-  const calculateCurrentState = () => {
-    const figureToRender = applyMovements(figureCurrentView, startPositionDelta);
-    return [...figureToRender, ...deathFigures];
+    document.getElementById('score').innerText = score.toString();
   };
 
   //paintLoop
   const paintLoop = () => {
     currentGravityCycle++;
-    if (currentGravityCycle > userGravityCycle){
+    if (currentGravityCycle > maxGravityCyclesAmount) {
       moveFigureDown();
       currentGravityCycle = 0;
-      userGravityCycle = defaultGravityCycle;
+      maxGravityCyclesAmount = defaultGravityCyclesRefreshAmount;
     }
     paintCurrentState(calculateCurrentState());
     paintTimerHolder = setTimeout(() => {
