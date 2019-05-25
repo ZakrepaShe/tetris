@@ -48,10 +48,12 @@
       .join('');
 
   // add game vars
-  let gravityTimerHolder;
+  let currentGravityCycle = 0;
+  let defaultGravityCycle = 30;//1 cell/s
+  let fastGravityCycle = 15; //  2 cells/s
+  let userGravityCycle = defaultGravityCycle;
   let paintTimerHolder;
-  let gravityLoopTime = 1000;
-  let paintLoopTime = 16;
+  let paintLoopTime = 16; //16ms = 30fps
   let startPositionDelta = [0,0];
   let deathFigures = [];
   let currentAction;
@@ -83,7 +85,7 @@
       [[4,2],[5,1],[5,2],[6,2]],
       [[5,1],[5,2],[5,3],[6,2]],
       [[4,1],[5,1],[5,2],[6,1]],
-      [[5,1],[5,2],[5,3],[6,2]]
+      [[5,1],[5,2],[5,3],[4,2]]
     ],
     'Z': [
       [[4,1],[5,1],[5,2],[6,2]],
@@ -114,10 +116,11 @@
 
 
   //dirty funcs ----
-  const getNextFigureViewPosition = () => figureViewNumber + 1 < figureViews.length - 1 ?  figureViewNumber + 1 : 0;
+  const getNextFigureViewPosition = () => figureViewNumber + 1 < figureViews.length ?  figureViewNumber + 1 : 0;
 
   function nextFigureView() {
-    figureCurrentView = figureViews[getNextFigureViewPosition];
+    figureViewNumber = getNextFigureViewPosition();
+    figureCurrentView = figureViews[figureViewNumber];
   }
 
   const overlapsBottomBorder = figure => figure.some(([,y]) => y > rows - 1);
@@ -129,23 +132,22 @@
     Object.entries(
       deathFigures.reduce((acc, [, lineNumber]) => ({
         ...acc,
-        y: acc[lineNumber] ? acc[lineNumber]++ : 1
+        [lineNumber]: acc[lineNumber] ? acc[lineNumber] + 1 : 1
       }), {}))
       .filter(([, totalBlocksInLine]) => totalBlocksInLine === cols)
       .map(([lineNumber,]) => lineNumber)
       .forEach(number => {
-        reduceFullLine(deathFigures, +number);
+        deathFigures = reduceFullLine(deathFigures, +number);
       })
   };
 
-  function moveFigureDown() {
+  const moveFigureDown = () => {
     const figureToCheck = applyMovements(figureCurrentView, [startPositionDelta[0],startPositionDelta[1]+1]);
     if(!(overlapsBottomBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))){
       startPositionDelta[1]+=1;
-      gravityLoopTime = 1000;
     } else {
       //check for lines and move if necessary
-      deathFigures = deathFigures.push(applyMovements(figureCurrentView, startPositionDelta));
+      deathFigures.push(...applyMovements(figureCurrentView, startPositionDelta));
       removeFullLines();
       //generate new figure
       startPositionDelta = [0,0];
@@ -159,17 +161,17 @@
         deathFigures = [];
       }
     }
-  }
+  };
 
   const actionsHolder = {
     rotateFigure: () => {
-      const figureToCheck = applyMovements(figureViews[getNextFigureViewPosition], startPositionDelta);
+      const figureToCheck = applyMovements(figureViews[getNextFigureViewPosition()], startPositionDelta);
       if(!(overlapsAnyBorder(figureToCheck) || hasOverlays(figureToCheck, deathFigures))){
         nextFigureView()
       }
     },
     speedUpFalling: () => {
-      gravityLoopTime = 500;
+      userGravityCycle = fastGravityCycle;
     },
     moveFigureLeft: () => {
       const figureToCheck = applyMovements(figureCurrentView, [startPositionDelta[0]-1,startPositionDelta[1]]);
@@ -204,30 +206,30 @@
   });
 
 
-  function paintCurrentState() {
-    const firureToRender = applyMovements(figureCurrentView, startPositionDelta);
-    let busyCells = [...firureToRender, ...deathFigures];
+  const paintCurrentState = busyCells => {
     // refresh html
     Array.from(document.getElementsByClassName('cell')).forEach(item => {
       item.classList.remove('cube');
-      if (busyCells.join('_').includes(item.id)) {
+      if (busyCells.some(cell => cell.toString() === item.id)) {
         item.classList.add('cube');
       }
     });
-  }
-
-  // gravityLoop
-  const gravityLoop = () => {
-    moveFigureDown();
-    gravityTimerHolder = setTimeout(() => {
-      requestAnimationFrame(gravityLoop)
-    }, gravityLoopTime);
   };
-  requestAnimationFrame(gravityLoop);
+
+  const calculateCurrentState = () => {
+    const figureToRender = applyMovements(figureCurrentView, startPositionDelta);
+    return [...figureToRender, ...deathFigures];
+  };
 
   //paintLoop
   const paintLoop = () => {
-    paintCurrentState();
+    currentGravityCycle++;
+    if (currentGravityCycle > userGravityCycle){
+      moveFigureDown();
+      currentGravityCycle = 0;
+      userGravityCycle = defaultGravityCycle;
+    }
+    paintCurrentState(calculateCurrentState());
     paintTimerHolder = setTimeout(() => {
       requestAnimationFrame(paintLoop)
     }, paintLoopTime);
