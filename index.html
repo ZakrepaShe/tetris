@@ -152,11 +152,9 @@
       }), {}))
       // filtering only full rows
       .filter(([, totalBlocksInLine]) => totalBlocksInLine === cols)
-      // taking full rows line numbers
-      .map(([lineNumber,]) => lineNumber)
       //clearing full rows and shifting all rows above each cleared row lower, 1 by 1
-      .forEach(number => {
-        frozenCells = reduceFullLine(frozenCells, +number);
+      .forEach(([lineNumber,]) => {
+        frozenCells = reduceFullLine(frozenCells, +lineNumber);
         fullRowAmount++
       });
     //score rising

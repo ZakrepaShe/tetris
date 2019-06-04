@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tetris</title>
+</head>
+<body>
+<style>
+  .cell {
+    width: 20px;
+    height: 20px;
+    border: 1px solid;
+    position: relative;
+    text-align: center;
+  }
+
+  table {
+    border: 1px solid;
+  }
+
+  .cube::before {
+    content: 'X';
+  }
+
+</style>
+<span>Score:</span>
+<span id="score">0</span>
+<table cellpadding="0" cellspacing="0">
+  <tbody></tbody>
+</table>
+<script>
+
+  class Store {
+    //defaults values
+    constructor(options = {}) {
+      this.defaults = {
+        cols: 10,
+        rows: 20,
+        defaultGravityCyclesRefreshAmount: 30, // ~1 cell/second
+        fastGravityCyclesRefreshAmount: 6, //   ~5 cells/second
+        paintLoopTime: 16, //16ms = 30fps
+        defaultStartPositionShift: [0, 0],
+        frozenCells: [],
+        score: 0,
+        figuresMap: {
+          'I': [
+            [[3,2],[4,2],[5,2],[6,2]],
+            [[5,0],[5,1],[5,2],[5,3]]
+          ],
+          'J': [
+            [[4,0],[4,1],[5,1],[6,1]],
+            [[6,0],[5,0],[5,1],[5,2]],
+            [[6,2],[6,1],[5,1],[4,1]],
+            [[4,2],[5,2],[5,1],[5,0]]
+          ],
+          'L': [
+            [[5,0],[5,1],[5,2],[6,2]],
+            [[4,2],[4,1],[5,1],[6,1]],
+            [[4,0],[5,0],[5,1],[5,2]],
+            [[6,0],[6,1],[5,1],[4,1]]
+          ],
+          'O': [
+            [[4,1],[5,1],[5,2],[4,2]]
+          ],
+          'S': [
+            [[4,2],[5,2],[5,1],[6,1]],
+            [[5,1],[5,2],[6,2],[6,3]]
+          ],
+          'T': [
+            [[4,2],[5,1],[5,2],[6,2]],
+            [[5,1],[5,2],[5,3],[6,2]],
+            [[4,1],[5,1],[5,2],[6,1]],
+            [[5,1],[5,2],[5,3],[4,2]]
+          ],
+          'Z': [
+            [[4,1],[5,1],[5,2],[6,2]],
+            [[5,3],[5,2],[6,2],[6,1]]
+          ]
+        },
+        directions: {
+          up: [0, -1],
+          down: [0, 1],
+          left: [-1, 0],
+          right: [1, 0]
+        },
+        scores: [0,100,300,700,1500],
+      };
+      // merge options and defaults
+      Object.keys(this.defaults).forEach(option => {
+        this[option] =  options[option] || this.defaults[option];
+      });
+
+      //initial values
+      this.maxGravityCyclesAmount = this.defaultGravityCyclesRefreshAmount;
+      this.startPositionShift = [...this.defaultStartPositionShift];
+      this.figureTypes = Object.keys(this.figuresMap);
+
+      // almost static methods
+      this.actionsHolder = {
+        rotateFigure: () => {
+          const figureToCheck = this.applyPositionShiftToFigure(this.startPositionShift, this.figureViews[this.getNextFigureViewNumber()]);
+          if (!(this.overlapsAnyBorder(figureToCheck) || this.hasOverlays(figureToCheck, this.frozenCells))) {
+            // apply next figure view
+            this.figureViewNumber = this.getNextFigureViewNumber();
+            this.figureCurrentView = this.figureViews[this.figureViewNumber];
+          }
+        },
+        speedUpFalling: () => {
+          this.maxGravityCyclesAmount = this.fastGravityCyclesRefreshAmount;
+        },
+        moveFigureLeft: () => {
+          const figureToCheck = this.applyPositionShiftToFigure(this.getMovedCurrentPosition(this.directions.left));
+          if (!(this.overlapsLeftBorder(figureToCheck) || this.hasOverlays(figureToCheck, this.frozenCells))) {
+            this.startPositionShift = this.getMovedCurrentPosition(this.directions.left)
+          }
+        },
+        moveFigureRight: () => {
+          const figureToCheck = this.applyPositionShiftToFigure(this.getMovedCurrentPosition(this.directions.right));
+          if (!(this.overlapsRightBorder(figureToCheck) || this.hasOverlays(figureToCheck, this.frozenCells))) {
+            this.startPositionShift = this.getMovedCurrentPosition(this.directions.right)
+          }
+        },
+        defaultAction: () => {}
+      };
+
+      // Define initial figure
+      this.generateNewFigure();
+    }
+
+    /** HELPERS **/
+    /** pure functions */
+    getRandomNumber = max => Math.floor(Math.random() * max);
+    // returns boolean, checks if 2 arrays have at least 1 similar item
+    hasOverlays = (f1, f2) => f1.some(i1 => f2.some(i2 => i1.toString() === i2.toString()));
+    // takes 2 arrays of coordinates and sum their appropriate values
+    shiftCoordinatesFor =
+      coordinatesArray1 =>
+        coordinatesArray2 =>
+          coordinatesArray1.map((axis, index) => axis + coordinatesArray2[index]);
+    manageFullLine = (cellsCoordinatesArray, lineNumber) =>
+      cellsCoordinatesArray
+        .filter(([, y]) => y !== lineNumber)
+        .map(([x, y]) => (y < lineNumber ? [x, y + 1] : [x, y]));
+
+    /** impure functions */
+    getRandArrItem = arr => arr[this.getRandomNumber(arr.length)];
+    getMovedCurrentPosition = shiftAmountsArray => this.shiftCoordinatesFor(this.startPositionShift)(shiftAmountsArray);
+    applyPositionShiftToFigure = (positionShiftArray, figureCoordinatesArray = this.figureCurrentView) =>
+      figureCoordinatesArray.map(this.shiftCoordinatesFor(positionShiftArray));
+    getNextFigureViewNumber = () => this.figureViewNumber + 1 < this.figureViews.length ? this.figureViewNumber + 1 : 0;
+
+    generateNewFigure() {
+      this.figureName = this.getRandArrItem(this.figureTypes);
+      this.figureViews = this.figuresMap[this.figureName];
+      this.figureViewNumber = this.getRandomNumber(this.figureViews.length);
+      this.figureCurrentView = this.figureViews[this.figureViewNumber];
+    };
+
+    addToScore = fullRowAmount => {
+      this.score+= this.scores[fullRowAmount];
+    };
+
+    // overlap checkers
+    overlapsBottomBorder = figure => figure.some(([, y]) => y > this.rows - 1);
+    overlapsLeftBorder = figure => figure.some(([x,]) => x < 0);
+    overlapsRightBorder = figure => figure.some(([x,]) => x > this.cols - 1);
+    overlapsAnyBorder = figure =>
+      this.overlapsBottomBorder(figure)
+      || this.overlapsLeftBorder(figure)
+      || this.overlapsRightBorder(figure);
+
+    updateStartPosition(newPositionShift) {this.startPositionShift = newPositionShift}
+    setFrozenCellsTo(newFrozenCells) {this.frozenCells = newFrozenCells}
+
+    manageFullLines() {
+      //taking in each row count of busy cells [["12",7],["14",2]]
+      let fullRowAmount = 0;
+      Object.entries(
+        this.frozenCells.reduce((acc, [, lineNumber]) => ({
+          ...acc,
+          [lineNumber]: acc[lineNumber] ? acc[lineNumber] + 1 : 1
+        }), {}))
+        // filtering only full rows
+        .filter(([, totalBlocksInLine]) => totalBlocksInLine === this.cols)
+        //clearing full rows and shifting all rows above each cleared row lower, 1 by 1
+        .forEach(([lineNumber,]) => {
+          this.setFrozenCellsTo(this.manageFullLine(this.frozenCells, +lineNumber));
+          fullRowAmount++
+        });
+      //score rising
+      this.addToScore(fullRowAmount);
+    };
+
+    moveFigureDown() {
+      const figureToCheck = this.applyPositionShiftToFigure(this.getMovedCurrentPosition(this.directions.down));
+      if (!(this.overlapsBottomBorder(figureToCheck) || this.hasOverlays(figureToCheck, this.frozenCells))) {
+        /** all is ok, moving figure down by 1 cell */
+        this.updateStartPosition(this.getMovedCurrentPosition(this.directions.down))
+      } else {
+        /** nowhere to move, rest in frozen peace */
+        //add current figure cells to frozen cells
+        this.frozenCells.push(...this.applyPositionShiftToFigure(this.startPositionShift));
+        //check for full lines, move blocks above if necessary, update score
+        this.manageFullLines();
+        //generate new figure and reset position
+        this.updateStartPosition([...this.defaultStartPositionShift]);
+        this.generateNewFigure();
+        /** new figure overlaps with corps - end game */
+        if (this.hasOverlays(this.figureCurrentView, this.frozenCells)) {
+          alert('Game Over, Score: ' + this.score);
+          this.setFrozenCellsTo([]);
+          this.score = 0;
+        }
+      }
+    };
+  }
+
+  const store = new Store();
+
+  // create table
+  document
+    .getElementsByTagName('tbody')[0]
+    .innerHTML =
+    (new Array(+store.rows)).fill(0)
+      .map(
+        (_, i) =>
+          `<tr>${
+            (new Array(+store.cols))
+              .fill(0)
+              .map(
+                (_, j) => `<td id="${j + ',' + i}" class="cell"></td>`
+              ).join('')
+            }</tr>`
+      )
+      .join('');
+
+  //add listeners
+  document.addEventListener('keydown', (e) => {
+    let key = e.key.toLowerCase();
+    // mapping action to string and taking appropriate action from actionsHolder object
+    // instead of using switch/case construction
+    let currentAction =
+      key === 'arrowup' || key === 'w'
+        ? 'rotateFigure'
+        : key === 'arrowdown' || key === 's'
+        ? 'speedUpFalling'
+        : key === 'arrowleft' || key === 'a'
+          ? 'moveFigureLeft'
+          : key === 'arrowright' || key === 'd'
+            ? 'moveFigureRight'
+            : 'defaultAction';
+    store.actionsHolder[currentAction]()
+  });
+
+  const calculateCurrentState = store => {
+    const currentFigureCells = store.applyPositionShiftToFigure(store.startPositionShift);
+    return {
+      // joining all cells together
+      busyCells: [...currentFigureCells, ...store.frozenCells],
+      score: store.score,
+    };
+  };
+
+  const paintCurrentState = state => {
+    const {busyCells, score} = state;
+    // refresh html
+    Array.from(document.getElementsByClassName('cell')).forEach(item => {
+      //cleans every item
+      item.classList.remove('cube');
+      // marks needed cells with 'X'
+      if (busyCells.some(cell => cell.toString() === item.id)) {
+        item.classList.add('cube');
+      }
+    });
+    document.getElementById('score').innerText = score.toString();
+  };
+
+  //paintLoop
+  let currentGravityCycle = 0;
+  const paintLoop = () => {
+    currentGravityCycle++;
+    if (currentGravityCycle > store.maxGravityCyclesAmount) {
+      store.moveFigureDown();
+      currentGravityCycle = 0;
+      store.maxGravityCyclesAmount = store.defaultGravityCyclesRefreshAmount;
+    }
+    paintCurrentState(calculateCurrentState(store));
+    setTimeout(() => {
+      requestAnimationFrame(paintLoop)
+    }, store.paintLoopTime);
+  };
+  requestAnimationFrame(paintLoop)
+
+</script>
+</body>
+</html>
